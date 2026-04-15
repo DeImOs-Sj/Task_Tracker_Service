@@ -1,8 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import Header from "./Header";
-import WorkspaceTabBar from "./WorkspaceTabBar";
+import WorkspaceSidebar from "./WorkspaceTabBar";
 import TaskTree from "./TaskTree";
 import type { Workspace } from "@/types";
 
@@ -41,7 +40,7 @@ export default function Dashboard({ userEmail }: { userEmail: string }) {
   }, []);
 
   const activeId = urlWs && workspaces.some((w) => w._id === urlWs) ? urlWs : null;
-  const setActiveId = (id: string | null) => navigateTo(id);
+  const activeWorkspace = workspaces.find((w) => w._id === activeId);
 
   async function createWorkspace(name: string) {
     const res = await fetch("/api/workspaces", {
@@ -62,13 +61,10 @@ export default function Dashboard({ userEmail }: { userEmail: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    if (res.ok) {
-      setWorkspaces((prev) => prev.map((w) => (w._id === id ? { ...w, name } : w)));
-    }
+    if (res.ok) setWorkspaces((prev) => prev.map((w) => (w._id === id ? { ...w, name } : w)));
   }
 
   async function reorderWorkspaces(orderedIds: string[]) {
-    // Optimistic update
     setWorkspaces((prev) => {
       const map = new Map(prev.map((w) => [w._id, w]));
       return orderedIds.map((id, idx) => ({ ...(map.get(id) as Workspace), order: idx }));
@@ -92,31 +88,46 @@ export default function Dashboard({ userEmail }: { userEmail: string }) {
   }
 
   return (
-    <div className="h-screen flex flex-col">
-      <Header email={userEmail} />
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-4 py-6">
-          {!loaded ? (
-            <p className="text-gray-400 text-sm">Loading…</p>
-          ) : workspaces.length === 0 ? (
-            <div className="text-center py-20 text-gray-400">
-              <p className="text-xl mb-2">Welcome to TaskNest</p>
-              <p className="text-sm">Create your first workspace using the + tab below.</p>
-            </div>
-          ) : activeId ? (
-            <TaskTree key={activeId} workspaceId={activeId} />
-          ) : null}
-        </div>
-      </main>
-      <WorkspaceTabBar
+    <div className="h-screen flex overflow-hidden">
+      <WorkspaceSidebar
         workspaces={workspaces}
         activeId={activeId}
-        onSelect={setActiveId}
+        email={userEmail}
+        onSelect={(id) => navigateTo(id)}
         onCreate={createWorkspace}
         onRename={renameWorkspace}
         onDelete={deleteWorkspace}
         onReorder={reorderWorkspaces}
       />
+
+      <div className="flex-1 flex flex-col min-w-0 bg-tk-bg">
+        {/* Top bar */}
+        <header className="h-14 flex-shrink-0 bg-tk-card border-b border-tk-border flex items-center px-6 shadow-sm">
+          <h2 className="text-base font-semibold text-tk-text">
+            {activeWorkspace?.name ?? (loaded && workspaces.length === 0 ? "TaskNest" : "…")}
+          </h2>
+        </header>
+
+        <main className="flex-1 overflow-y-auto">
+          {!loaded ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="text-tk-muted text-sm">Loading…</p>
+            </div>
+          ) : workspaces.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <div className="w-16 h-16 rounded-2xl bg-tk-blue-light flex items-center justify-center mb-4">
+                <span className="text-2xl">✓</span>
+              </div>
+              <p className="text-lg font-semibold text-tk-text mb-1">Welcome to TaskNest</p>
+              <p className="text-sm text-tk-muted">Create your first workspace using the sidebar.</p>
+            </div>
+          ) : activeId ? (
+            <div className="max-w-2xl mx-auto px-6 py-6">
+              <TaskTree key={activeId} workspaceId={activeId} />
+            </div>
+          ) : null}
+        </main>
+      </div>
     </div>
   );
 }

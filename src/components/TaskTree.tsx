@@ -47,6 +47,8 @@ export default function TaskTree({ workspaceId }: { workspaceId: string }) {
   const [tasks, setTasks] = useState<TaskDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [maxDepth, setMaxDepth] = useState<number | "all">("all");
+  const [rootDragId, setRootDragId] = useState<string | null>(null);
+  const [rootOverId, setRootOverId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -67,11 +69,68 @@ export default function TaskTree({ workspaceId }: { workspaceId: string }) {
     [tree, maxDepth]
   );
 
-  async function addTask(
-    text: string,
-    parentId: string | null,
-    attachments: Attachment[] = []
-  ) {
+  async function reorderTasks(parentId: string | null, orderedIds: string[]) {
+    setTasks((prev) => {
+      const orderMap = new Map(orderedIds.map((id, i) => [id, i]));
+      return prev.map((t) => {
+        if (t.parentId === parentId && orderMap.has(t._id)) {
+          return { ...t, order: orderMap.get(t._id)! };
+        }
+        return t;
+      });
+    });
+    await fetch("/api/tasks/reorder", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId, parentId, orderedIds }),
+    });
+  }
+
+  function makeRootDragProps(taskId: string) {
+    return {
+      draggable: true as const,
+      onDragStart(e: React.DragEvent) {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", taskId);
+        setRootDragId(taskId);
+      },
+      onDragEnd(e: React.DragEvent) {
+        e.stopPropagation();
+        setRootDragId(null);
+        setRootOverId(null);
+      },
+      onDragOver(e: React.DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        setRootOverId(taskId);
+      },
+      onDragLeave(e: React.DragEvent) {
+        e.stopPropagation();
+        // Only clear if leaving to something outside this element
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setRootOverId((id) => (id === taskId ? null : id));
+        }
+      },
+      onDrop(e: React.DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        const draggedId = e.dataTransfer.getData("text/plain");
+        if (!draggedId || draggedId === taskId) return;
+        const ids = visibleTree.map((t) => t._id);
+        const from = ids.indexOf(draggedId);
+        const to = ids.indexOf(taskId);
+        if (from < 0 || to < 0) return;
+        ids.splice(to, 0, ids.splice(from, 1)[0]);
+        reorderTasks(null, ids);
+        setRootDragId(null);
+        setRootOverId(null);
+      },
+    };
+  }
+
+  async function addTask(text: string, parentId: string | null, attachments: Attachment[] = []) {
     const res = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -79,7 +138,6 @@ export default function TaskTree({ workspaceId }: { workspaceId: string }) {
     });
     if (!res.ok) {
       const msg = await res.text().catch(() => "");
-      console.error("Failed to create task", res.status, msg);
       alert(`Failed to create task (${res.status}). ${msg}`);
       return;
     }
@@ -92,12 +150,7 @@ export default function TaskTree({ workspaceId }: { workspaceId: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attachments }),
     });
-    if (!res.ok) {
-      const msg = await res.text().catch(() => "");
-      console.error("Failed to update attachments", res.status, msg);
-      alert(`Failed to save attachments (${res.status}). ${msg}`);
-      return;
-    }
+    if (!res.ok) { alert(`Failed to save attachments (${res.status}).`); return; }
     await load();
   }
 
@@ -129,48 +182,66 @@ export default function TaskTree({ workspaceId }: { workspaceId: string }) {
     await load();
   }
 
-  if (loading) return <p className="text-gray-400 text-sm">Loading…</p>;
+  if (loading)
+    return (
+      <div className="flex items-center justify-center py-16">
+        <p className="text-tk-muted text-sm">Loading…</p>
+      </div>
+    );
 
   return (
     <div>
-      <div className="flex items-center justify-end gap-2 mb-3">
-        <label className="text-xs text-gray-500">Show levels:</label>
-        <select
-          value={maxDepth === "all" ? "all" : String(maxDepth)}
-          onChange={(e) =>
-            setMaxDepth(e.target.value === "all" ? "all" : Number(e.target.value))
-          }
-          className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
-        >
-          <option value="all">All</option>
-          {Array.from({ length: Math.max(treeDepth, 1) }, (_, i) => i + 1).map((lvl) => (
-            <option key={lvl} value={lvl}>
-              Up to {lvl}
-            </option>
-          ))}
-        </select>
-      </div>
+      {treeDepth > 1 && (
+        <div className="flex items-center justify-end gap-2 mb-4">
+          <label className="text-xs text-tk-muted">Show levels:</label>
+          <select
+            value={maxDepth === "all" ? "all" : String(maxDepth)}
+            onChange={(e) =>
+              setMaxDepth(e.target.value === "all" ? "all" : Number(e.target.value))
+            }
+            className="text-xs border border-tk-border rounded-lg px-2.5 py-1.5 bg-tk-card text-tk-text focus:outline-none focus:ring-2 focus:ring-accent/30"
+          >
+            <option value="all">All levels</option>
+            {Array.from({ length: Math.max(treeDepth, 1) }, (_, i) => i + 1).map((lvl) => (
+              <option key={lvl} value={lvl}>
+                Up to {lvl}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {tree.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-lg mb-1">No tasks yet</p>
-          <p className="text-sm">Add your first task below.</p>
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-tk-blue-light flex items-center justify-center mb-3">
+            <span className="text-xl">📋</span>
+          </div>
+          <p className="text-base font-medium text-tk-text mb-1">No tasks yet</p>
+          <p className="text-sm text-tk-muted">Add your first task below.</p>
         </div>
       ) : (
-        visibleTree.map((t, i) => (
-          <TaskItem
-            key={t._id}
-            task={t}
-            depth={0}
-            number={`${i + 1}`}
-            onToggle={toggle}
-            onEdit={edit}
-            onDelete={remove}
-            onAddChild={(pid, text, atts) => addTask(text, pid, atts)}
-            onSetDeadline={setDeadline}
-            onSetAttachments={setAttachments}
-          />
-        ))
+        <div className="space-y-1">
+          {visibleTree.map((t, i) => (
+            <TaskItem
+              key={t._id}
+              task={t}
+              depth={0}
+              number={`${i + 1}`}
+              onToggle={toggle}
+              onEdit={edit}
+              onDelete={remove}
+              onAddChild={(pid, text, atts) => addTask(text, pid, atts)}
+              onSetDeadline={setDeadline}
+              onSetAttachments={setAttachments}
+              onReorder={reorderTasks}
+              isDragging={rootDragId === t._id}
+              isDragOver={rootOverId === t._id}
+              dragProps={makeRootDragProps(t._id)}
+            />
+          ))}
+        </div>
       )}
+
       <div className="mt-4">
         <AddTaskInput onAdd={(text, atts) => addTask(text, null, atts)} />
       </div>
