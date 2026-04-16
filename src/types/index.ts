@@ -4,7 +4,7 @@ export interface Workspace {
   order: number;
 }
 
-export type AttachmentType = "link" | "pdf" | "note";
+export type AttachmentType = "link" | "pdf" | "note" | "image" | "video";
 
 export interface Attachment {
   id: string;

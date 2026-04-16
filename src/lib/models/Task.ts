@@ -1,6 +1,6 @@
 import mongoose, { Schema, Model } from "mongoose";
 
-export type AttachmentType = "link" | "pdf" | "note";
+export type AttachmentType = "link" | "pdf" | "note" | "image" | "video";
 
 export interface IAttachment {
   id: string;
@@ -28,7 +28,7 @@ export interface ITask {
 const AttachmentSchema = new Schema<IAttachment>(
   {
     id: { type: String, required: true },
-    type: { type: String, enum: ["link", "pdf", "note"], required: true },
+    type: { type: String, enum: ["link", "pdf", "note", "image", "video"], required: true },
     name: { type: String, default: "" },
     url: { type: String },
     data: { type: String },

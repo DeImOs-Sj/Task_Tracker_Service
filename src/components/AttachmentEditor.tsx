@@ -2,9 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Attachment, AttachmentType } from "@/types";
 
-// Turn a base64 data URL back into a Blob. window.open on a data: URL is
-// blocked or rendered blank in most modern browsers, so we convert to a
-// blob URL before opening a viewer.
 function dataUrlToBlob(dataUrl: string): Blob | null {
   const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
   if (!match) return null;
@@ -21,7 +18,9 @@ function dataUrlToBlob(dataUrl: string): Blob | null {
   }
 }
 
-const MAX_PDF_BYTES = 2 * 1024 * 1024; // keep in sync with src/lib/attachments.ts
+const MAX_PDF_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
 
 interface Props {
@@ -46,7 +45,17 @@ function readFileAsDataUrl(file: File): Promise<string> {
 function labelFor(type: AttachmentType) {
   if (type === "link") return "Link";
   if (type === "pdf") return "PDF";
+  if (type === "image") return "Image";
+  if (type === "video") return "Video";
   return "Note";
+}
+
+function iconFor(type: AttachmentType) {
+  if (type === "link") return "🔗";
+  if (type === "pdf") return "📄";
+  if (type === "image") return "🖼";
+  if (type === "video") return "🎬";
+  return "📝";
 }
 
 export default function AttachmentEditor({ attachments, onChange, compact }: Props) {
@@ -58,13 +67,13 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
   const [noteContent, setNoteContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [viewingNote, setViewingNote] = useState<Attachment | null>(null);
-  const [viewingPdf, setViewingPdf] = useState<{ attachment: Attachment; url: string } | null>(
-    null
-  );
+  const [viewingPdf, setViewingPdf] = useState<{ attachment: Attachment; url: string } | null>(null);
+  const [viewingImage, setViewingImage] = useState<Attachment | null>(null);
+  const [viewingVideo, setViewingVideo] = useState<Attachment | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
-  // Revoke the PDF blob URL when the viewer closes (or the component unmounts)
-  // so we don't leak memory holding onto multi-MB PDFs.
   useEffect(() => {
     if (!viewingPdf) return;
     const url = viewingPdf.url;
@@ -73,18 +82,19 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
     };
   }, [viewingPdf]);
 
-  // Close the viewer on Escape — standard modal affordance.
   useEffect(() => {
-    if (!viewingPdf && !viewingNote) return;
+    if (!viewingPdf && !viewingNote && !viewingImage && !viewingVideo) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setViewingPdf(null);
         setViewingNote(null);
+        setViewingImage(null);
+        setViewingVideo(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [viewingPdf, viewingNote]);
+  }, [viewingPdf, viewingNote, viewingImage, viewingVideo]);
 
   const atLimit = attachments.length >= MAX_ATTACHMENTS;
 
@@ -118,7 +128,7 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
     setOpen(false);
   }
 
-  async function handleFile(file: File) {
+  async function handlePdfFile(file: File) {
     setError(null);
     if (file.type !== "application/pdf") {
       setError("Only PDF files are supported");
@@ -130,10 +140,45 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
     }
     try {
       const data = await readFileAsDataUrl(file);
-      onChange([
-        ...attachments,
-        { id: randId(), type: "pdf", name: file.name || "document.pdf", data },
-      ]);
+      onChange([...attachments, { id: randId(), type: "pdf", name: file.name || "document.pdf", data }]);
+      setOpen(false);
+    } catch {
+      setError("Failed to read file");
+    }
+  }
+
+  async function handleImageFile(file: File) {
+    setError(null);
+    if (!file.type.startsWith("image/")) {
+      setError("Only image files are supported");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError(`Image too large (max ${Math.round(MAX_IMAGE_BYTES / (1024 * 1024))} MB)`);
+      return;
+    }
+    try {
+      const data = await readFileAsDataUrl(file);
+      onChange([...attachments, { id: randId(), type: "image", name: file.name || "image", data }]);
+      setOpen(false);
+    } catch {
+      setError("Failed to read file");
+    }
+  }
+
+  async function handleVideoFile(file: File) {
+    setError(null);
+    if (!file.type.startsWith("video/")) {
+      setError("Only video files are supported");
+      return;
+    }
+    if (file.size > MAX_VIDEO_BYTES) {
+      setError(`Video too large (max ${Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB)`);
+      return;
+    }
+    try {
+      const data = await readFileAsDataUrl(file);
+      onChange([...attachments, { id: randId(), type: "video", name: file.name || "video", data }]);
       setOpen(false);
     } catch {
       setError("Failed to read file");
@@ -175,22 +220,33 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
     }
     if (a.type === "note") {
       setViewingNote(a);
+      return;
+    }
+    if (a.type === "image") {
+      setViewingImage(a);
+      return;
+    }
+    if (a.type === "video") {
+      setViewingVideo(a);
+      return;
     }
   }
 
-  function downloadPdf(a: Attachment) {
-    if (a.type !== "pdf" || !a.data) return;
+  function downloadAttachment(a: Attachment) {
+    if (!a.data) return;
     const blob = dataUrlToBlob(a.data);
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = a.name || "document.pdf";
+    link.download = a.name || "file";
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
+
+  const tabs: AttachmentType[] = ["link", "pdf", "image", "video", "note"];
 
   return (
     <div className="w-full">
@@ -206,8 +262,8 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
                 onClick={() => openAttachment(a)}
                 className="inline-flex items-center gap-1 truncate"
                 title={
-                  a.type === "pdf"
-                    ? `${a.name} — click to open in new tab`
+                  a.type === "pdf" || a.type === "image" || a.type === "video"
+                    ? `${a.name} — click to open`
                     : a.type === "note"
                     ? `${a.name} — click to view`
                     : a.url || a.name
@@ -218,12 +274,12 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
                 </span>
                 <span className="truncate">{a.name}</span>
               </button>
-              {a.type === "pdf" && (
+              {(a.type === "pdf" || a.type === "image" || a.type === "video") && (
                 <button
                   type="button"
-                  onClick={() => downloadPdf(a)}
+                  onClick={() => downloadAttachment(a)}
                   className="text-gray-400 hover:text-accent w-4 h-4 flex items-center justify-center"
-                  aria-label="Download PDF"
+                  aria-label="Download"
                   title="Download"
                 >
                   ↓
@@ -255,14 +311,14 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
             className={`inline-flex items-center gap-1 text-xs text-gray-500 hover:text-accent border border-dashed border-gray-300 hover:border-accent rounded-full px-2 py-0.5 transition-all ${
               compact ? "" : ""
             }`}
-            title="Attach link, PDF, or note"
+            title="Attach link, PDF, image, video, or note"
           >
             + Attach
           </button>
           {open && (
             <div className="absolute z-20 mt-1 left-0 w-80 bg-white border border-gray-200 rounded-lg shadow-lg p-3">
-              <div className="flex gap-1 mb-2 text-xs">
-                {(["link", "pdf", "note"] as AttachmentType[]).map((t) => (
+              <div className="flex gap-1 mb-2 text-xs flex-wrap">
+                {tabs.map((t) => (
                   <button
                     type="button"
                     key={t}
@@ -274,7 +330,7 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
                       tab === t ? "bg-accent/15 text-teal-700" : "text-gray-500 hover:bg-gray-100"
                     }`}
                   >
-                    {labelFor(t)}
+                    {iconFor(t)} {labelFor(t)}
                   </button>
                 ))}
                 <button
@@ -325,13 +381,51 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
                     accept="application/pdf"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
-                      if (f) handleFile(f);
+                      if (f) handlePdfFile(f);
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}
                     className="text-xs"
                   />
                   <p className="text-[10px] text-gray-400">
                     Max {Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB. Stored inline with the task.
+                  </p>
+                </div>
+              )}
+
+              {tab === "image" && (
+                <div className="flex flex-col gap-2">
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleImageFile(f);
+                      if (imageInputRef.current) imageInputRef.current.value = "";
+                    }}
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-gray-400">
+                    JPG, PNG, GIF, WebP, SVG. Max {Math.round(MAX_IMAGE_BYTES / (1024 * 1024))} MB.
+                  </p>
+                </div>
+              )}
+
+              {tab === "video" && (
+                <div className="flex flex-col gap-2">
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleVideoFile(f);
+                      if (videoInputRef.current) videoInputRef.current.value = "";
+                    }}
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-gray-400">
+                    MP4, WebM, OGG, MOV. Max {Math.round(MAX_VIDEO_BYTES / (1024 * 1024))} MB.
                   </p>
                 </div>
               )}
@@ -413,7 +507,7 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
               </h3>
               <button
                 type="button"
-                onClick={() => downloadPdf(viewingPdf.attachment)}
+                onClick={() => downloadAttachment(viewingPdf.attachment)}
                 className="text-xs text-gray-500 hover:text-accent border border-gray-200 hover:border-accent rounded px-2 py-1"
                 title="Download"
               >
@@ -442,6 +536,96 @@ export default function AttachmentEditor({ attachments, onChange, compact }: Pro
                 src={viewingPdf.url}
                 title={viewingPdf.attachment.name}
                 className="w-full h-full border-0"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingImage && viewingImage.data && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setViewingImage(null)}
+        >
+          <div
+            className="relative max-w-5xl w-full max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-3 py-2 bg-white/10 rounded-t-xl backdrop-blur-sm">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-white/70 bg-white/20 rounded px-1.5 py-[2px]">
+                Image
+              </span>
+              <h3 className="font-semibold text-white truncate flex-1" title={viewingImage.name}>
+                {viewingImage.name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => downloadAttachment(viewingImage)}
+                className="text-xs text-white/70 hover:text-white border border-white/30 hover:border-white rounded px-2 py-1"
+                title="Download"
+              >
+                Download
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingImage(null)}
+                className="text-white/70 hover:text-white w-7 h-7 flex items-center justify-center text-lg"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 flex items-center justify-center bg-black/40 rounded-b-xl overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={viewingImage.data}
+                alt={viewingImage.name}
+                className="max-w-full max-h-[80vh] object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingVideo && viewingVideo.data && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setViewingVideo(null)}
+        >
+          <div
+            className="relative max-w-5xl w-full flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-3 py-2 bg-white/10 rounded-t-xl backdrop-blur-sm">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-white/70 bg-white/20 rounded px-1.5 py-[2px]">
+                Video
+              </span>
+              <h3 className="font-semibold text-white truncate flex-1" title={viewingVideo.name}>
+                {viewingVideo.name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => downloadAttachment(viewingVideo)}
+                className="text-xs text-white/70 hover:text-white border border-white/30 hover:border-white rounded px-2 py-1"
+                title="Download"
+              >
+                Download
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingVideo(null)}
+                className="text-white/70 hover:text-white w-7 h-7 flex items-center justify-center text-lg"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="bg-black rounded-b-xl overflow-hidden">
+              <video
+                src={viewingVideo.data}
+                controls
+                autoPlay
+                className="w-full max-h-[80vh]"
               />
             </div>
           </div>
